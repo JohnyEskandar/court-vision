@@ -36,7 +36,7 @@ for match in data:
 
             for outcome in market["outcomes"]:
                 cleansed.append({
-                    "tip off": time,
+                    "game time": time,
                     "game": away + " at " + home,
                     "book": book,
                     "favorite": outcome["name"],
