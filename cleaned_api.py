@@ -4,11 +4,12 @@ from datetime import datetime
 
 # Initial API Call
 key = "78aac9217e5b16253e383fb61661f079"
-sport = "basketball_nba"
 region = "us"
 attribute = "spreads"
 
-url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+#url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+url = "https://api.the-odds-api.com/v4/sports/upcoming/odds"
+
 params = {
     "apiKey": key,
     "regions": region,
@@ -26,6 +27,7 @@ for match in data:
     time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
     home = match["home_team"]
     away = match["away_team"]
+    league = match["sport_title"]
 
     for site in match["bookmakers"]:
         book = site["title"]
@@ -36,7 +38,9 @@ for match in data:
 
             for outcome in market["outcomes"]:
                 cleansed.append({
-                    "tip off": time,
+                    "league" : league,
+                    "prop" :  away.split()[-1] + " at " + home.split()[-1] + " spread",
+                    "game-time": time.astimezone().strftime("%-I:%M %p"),
                     "game": away + " at " + home,
                     "book": book,
                     "favorite": outcome["name"],
@@ -44,11 +48,12 @@ for match in data:
                     "odds": outcome["price"]
                 })
 
-# Build DataFrame
 api_data = pd.DataFrame(cleansed)
 
-# Sort properly
-api_data = api_data.sort_values(by="tip off").reset_index(drop=True)
+api_data = api_data.sort_values(by="game-time").reset_index(drop=True)
 
-# Show result
-print(api_data)
+#print(api_data)
+
+# If we want to only look at one sport 
+NHL_spreads= api_data[api_data["league"] == "NHL"]
+print(NHL_spreads)
