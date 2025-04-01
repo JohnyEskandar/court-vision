@@ -7,7 +7,7 @@ key = "78aac9217e5b16253e383fb61661f079"
 region = "us"
 attribute = "spreads"
 
-#url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+
 url = "https://api.the-odds-api.com/v4/sports/upcoming/odds"
 
 params = {
@@ -40,7 +40,7 @@ for match in data:
                 cleansed.append({
                     "league" : league,
                     "prop" :  away.split()[-1] + " at " + home.split()[-1] + " spread",
-                    "game-time": time.astimezone().strftime("%-I:%M %p"),
+                    "game-time": time.astimezone().strftime("%I:%M %p").lstrip("0"),
                     "game": away + " at " + home,
                     "book": book,
                     "favorite": outcome["name"],
