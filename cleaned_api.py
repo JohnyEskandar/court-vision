@@ -1,22 +1,43 @@
 import requests
 import pandas as pd
 from datetime import datetime
+import matplotlib.pyplot as plt
 
-# Initial API Call
-key = "78aac9217e5b16253e383fb61661f079"
-region = "us"
-attribute = "spreads"
+# Initial API Key for access
+API_KEY = "78aac9217e5b16253e383fb61661f079"
 
-
-url = "https://api.the-odds-api.com/v4/sports/upcoming/odds"
-
+#Fetches available sports from the Odds-API
+url = "https://api.the-odds-api.com/v4/sports"
 params = {
-    "apiKey": key,
-    "regions": region,
-    "markets": attribute,
+    "apiKey": API_KEY
+}
+
+#List of all sporting event/games on a given day
+response = requests.get(url, params=params)
+sports_data = response.json()
+
+# Key name for all sports
+print("Basketball Key")
+for sport in sports_data:
+    print(f"{sport['title']} Key: {sport['key']}")
+
+#Filter by Sport
+SPORT = "basketball_nba"  
+REGION = "us"
+
+#Since we are interested in spreads, we can utilize this metric
+MARKET = "spreads"
+
+# Initial API Call to get odds for the selected sport
+url = f"https://api.the-odds-api.com/v4/sports/{SPORT}/odds"
+params = {
+    "apiKey": API_KEY,
+    "regions": REGION,
+    "markets": MARKET,
     "oddsFormat": "american"
 }
 
+# Fetch odds data
 response = requests.get(url, params=params)
 data = response.json()
 
@@ -27,33 +48,44 @@ for match in data:
     time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
     home = match["home_team"]
     away = match["away_team"]
-    league = match["sport_title"]
 
     for site in match["bookmakers"]:
         book = site["title"]
         
         for market in site["markets"]:
-            if market["key"] != "spreads":
+            if market["key"] != MARKET:
                 continue
 
             for outcome in market["outcomes"]:
                 cleansed.append({
-                    "league" : league,
-                    "prop" :  away.split()[-1] + " at " + home.split()[-1] + " spread",
-                    "game-time": time.astimezone().strftime("%I:%M %p").lstrip("0"),
-                    "game": away + " at " + home,
-                    "book": book,
-                    "favorite": outcome["name"],
+                    "tip-off": time,
+                    "home_team": home,
+                    "away_team": away,
+                    "sportsbook": book,
+                    "team": outcome["name"],
                     "spread": outcome["point"],
                     "odds": outcome["price"]
                 })
 
+#Stores all of the data from the Cleansed Data
 api_data = pd.DataFrame(cleansed)
 
-api_data = api_data.sort_values(by="game-time").reset_index(drop=True)
+# Sort properly
+api_data = api_data.sort_values(by="tip-off").reset_index(drop=True)
 
-#print(api_data)
+print("\nOdds Data for Selected Sport:")
+# print(api_data)
 
-# If we want to only look at one sport 
-NHL_spreads= api_data[api_data["league"] == "NHL"]
-print(NHL_spreads)
+
+
+#Initial Plotting 
+
+#Odds Per Sportsbook
+avg_odds = api_data.groupby("sportsbook")["odds"].mean().sort_values()
+avg_odds.plot(kind="barh", color="mediumseagreen", edgecolor="black")
+plt.title("Average Odds per Sportsbook")
+plt.xlabel("Average Odds")
+plt.ylabel("Sportsbook")
+plt.grid(axis='x', linestyle='--', alpha=0.6)
+plt.tight_layout()
+plt.show()
