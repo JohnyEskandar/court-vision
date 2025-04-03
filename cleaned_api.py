@@ -4,12 +4,12 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 
 # Initial API Key for access
-API_KEY = "78aac9217e5b16253e383fb61661f079"
+key = "78aac9217e5b16253e383fb61661f079"
 
 #Fetches available sports from the Odds-API
 url = "https://api.the-odds-api.com/v4/sports"
 params = {
-    "apiKey": API_KEY
+    "apiKey": key
 }
 
 #List of all sporting event/games on a given day
@@ -31,7 +31,7 @@ MARKET = "spreads"
 # Initial API Call to get odds for the selected sport
 url = f"https://api.the-odds-api.com/v4/sports/{SPORT}/odds"
 params = {
-    "apiKey": API_KEY,
+    "apiKey": key,
     "regions": REGION,
     "markets": MARKET,
     "oddsFormat": "american"
@@ -73,12 +73,19 @@ api_data = pd.DataFrame(cleansed)
 # Sort properly
 api_data = api_data.sort_values(by="tip-off").reset_index(drop=True)
 
-print("\nOdds Data for Selected Sport:")
 # print(api_data)
 
-
-
-#Initial Plotting 
+#Best odds per Team
+best_odds = api_data.loc[api_data.groupby("team")["odds"].idxmax()]
+best_odds_sorted = best_odds.sort_values(by="odds", ascending=False)
+plt.bar(best_odds_sorted["team"], best_odds_sorted["odds"], color="coral", edgecolor="black")
+plt.xticks(rotation=45, ha="right")
+plt.title(" Best Odds Available per Team (Across All Sportsbooks)")
+plt.xlabel("Team")
+plt.ylabel("Best Odds (American)")
+plt.tight_layout()
+plt.grid(axis='y', linestyle='--', alpha=0.6)
+plt.show()
 
 #Odds Per Sportsbook
 avg_odds = api_data.groupby("sportsbook")["odds"].mean().sort_values()
