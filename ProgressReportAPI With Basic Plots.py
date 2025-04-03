@@ -28,8 +28,8 @@ region = "us"
 #Since we are interested in spreads, we can utilize this metric
 metric = "spreads"
 
-# Initial API Call to get odds for the selected sport
-url = f"https://api.the-odds-api.com/v4/sports/{SPORT}/odds"
+# Initial API Call to get odds for the selected sportNOTE: This visualization was taken before the games started and these graphs will change frequently based on the scores and injuries in a given game. 
+url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
 params = {
     "apiKey": key,
     "regions": region,
@@ -112,7 +112,7 @@ api_data["matchup"] = api_data["away_team"] + " @ " + api_data["home_team"]
 # #### Appending a Spread Score
 
 #Negates the value of the spread to give a spread score
-api_data["spread_score"] =  api_data["spread"]
+api_data["spread_score"] =  -api_data["spread"]
 
 
 # ###### Converts Spread Odds to a Probability of Hitting
@@ -127,6 +127,7 @@ def spread_odd_probability(odds):
 
 #Append the Spread Probability to the Data
 api_data["spread_probability"] = api_data["odds"].apply(spread_odd_probability)
+
 # -
 
 # # Win Score Calculation
@@ -137,13 +138,19 @@ api_data["win_score"] = 0.5 * api_data["spread_score"] + 0.5 * api_data["spread_
 
 # ### Matchup Winners
 
+#First we need to extract by the average win score across all books
+group_by_win = (
+    api_data.groupby(["matchup", "team"])
+    .agg({"win_score": "mean"})
+    .reset_index()
+)
+
 # +
-for matchup, game in avg_scores.groupby("matchup"):
-    #Has to be 2 teams per matchup
+for matchup, game in group_by_win.groupby("matchup"):
+    #2 Teams per matchup
     if len(game) != 2:
         continue
 
-    #Extract Team, Win Scores, and Projected Winner
     teams = game["team"].values
     scores = game["win_score"].values
     winner = teams[np.argmax(scores)]
