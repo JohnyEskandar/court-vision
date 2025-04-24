@@ -13,7 +13,7 @@ st.set_page_config(page_title="Court Vison", layout="wide")
 st.title("Stay Ahead and Make some Bread")
 
 # API configuration
-API_KEY = "827e4300b8d71acf49cac34c9a405670"
+API_KEY = "23460d3aaebd465dfc9eebfe77c12c21"
 API_URL = "https://api.the-odds-api.com/v4/sports"
 
 # Helper Functions
