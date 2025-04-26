@@ -8,24 +8,19 @@ from functools import reduce
 import statsmodels.api as sm
 from scipy.stats import ttest_ind
 
-#Set App Title and Page Config Title
 st.set_page_config(page_title="Court Vision", layout="wide")
 st.title("Stay Ahead and Make some Bread")
 
-#API Key and Declaration
 API_KEY = "23460d3aaebd465dfc9eebfe77c12c21"
 API_URL = "https://api.the-odds-api.com/v4/sports"
 
-#Converts Odds to an Implied Probability
-def implied_probability(odds):
+def odds_to_probability(odds):
     return 100 / (odds + 100) if odds > 0 else -odds / (-odds + 100)
 
-#Converts Odds to Decimal
-def convert_american(odds):
+def american_odds(odds):
     return odds / 100 + 1 if odds > 0 else -100 / odds + 1
 
-#Fetching Data for NBA, NHL, and MLB
-def fetch_main():
+def fetch_sports_data():
     try:
         response = requests.get(API_URL, params={"apiKey": API_KEY})
         response.raise_for_status()
@@ -36,8 +31,7 @@ def fetch_main():
         st.error(f"Failed to Connect: {str(e)}")
         return []
 
-#Fetching the Odds for our specific Sports
-def fetch_odds(sport_key):
+def fetch_odds_data(sport_key):
     url = f"{API_URL}/{sport_key}/odds"
     params = {
         "apiKey": API_KEY,
@@ -53,8 +47,7 @@ def fetch_odds(sport_key):
         st.error(f"Failed to fetch odds data: {str(e)}")
         return []
 
-#Data Cleaning
-def raw_data_cleaning(data):
+def clean_odds_data(data):
     cleaned_data = []
     for match in data:
         game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
@@ -80,50 +73,43 @@ def raw_data_cleaning(data):
                     cleaned_data.append(entry)
     return pd.DataFrame(cleaned_data)
 
-#Calculating our Win Score Metric
-def win_score(df):
+def calculate_win_scores(df):
     spreads = df[df["market"] == "spreads"].copy()
     if spreads.empty:
         return spreads
     spreads["spread_score"] = -spreads["point"]
-    spreads["prob"] = spreads["odds"].apply(implied_probability)
+    spreads["prob"] = spreads["odds"].apply(odds_to_probability)
     spreads["win_score"] = 0.5 * spreads["spread_score"] + 0.5 * spreads["prob"]
     return spreads
 
-#Calculate our Value Score and Value Bets
-def value_bets(spreads, h2h):
+def calculate_value_bets(spreads, h2h):
     if h2h.empty:
         return pd.DataFrame()
-    h2h["win_probability"] = h2h["odds"].apply(implied_probability)
+    h2h["win_probability"] = h2h["odds"].apply(odds_to_probability)
     value_df = h2h.merge(spreads[["team", "win_score"]], on="team", how="left")
     value_df["value_score"] = value_df["win_score"] - value_df["win_probability"]
     best_value = value_df.loc[value_df.groupby("team")["value_score"].idxmax()].reset_index(drop=True)
     return best_value[best_value["odds"] > -200].sort_values("value_score", ascending=False)
 
-#Measures Whether Books are Biased to Unders or Overs
-def book_bias(df):
+def calculate_book_bias(df):
     totals = df[df["market"] == "totals"].copy()
     if totals.empty:
         return pd.Series(dtype=float)
-    totals["probability"] = totals["odds"].apply(implied_probability)
+    totals["probability"] = totals["odds"].apply(odds_to_probability)
     pivot = totals.pivot_table(index=["matchup", "sportsbook", "point"], 
                              columns="team", values="probability").reset_index()
     pivot["public_bias"] = pivot.get("Over", np.nan) - pivot.get("Under", np.nan)
     bias = pivot.dropna(subset=["public_bias"])
     return bias.groupby("sportsbook")["public_bias"].mean().sort_values()
 
-#Calculating the Amount that Each Parlay Will Pay Out
-def payout(bets, stake = 100):
-    decimal_odds = [convert_american(bet['odds']) for bet in bets]
+def calculate_parlay_payout(bets, stake=100):
+    decimal_odds = [american_odds(bet['odds']) for bet in bets]
     combined_odds = reduce(lambda x, y: x * y, decimal_odds)
     payout = stake * combined_odds
     profit = payout - stake
     return combined_odds, payout, profit
 
-#Front End App Interface 
-
-#Display Our Favorite Picks
-def categorizing_picks(h2h_data):
+def display_favorite_picks(h2h_data):
     if h2h_data.empty:
         st.warning("No moneyline data available")
         return
@@ -154,16 +140,14 @@ def categorizing_picks(h2h_data):
         else:
             st.info(f"No {category_name.lower()} found")
 
-#Display the Value Bets
-def value_analysis(best_value_bets):
+def display_value_bets_tab(best_value_bets):
     st.subheader("Top Value Bets")
     if not best_value_bets.empty:
         st.dataframe(best_value_bets[["team", "matchup", "odds", "win_probability", "win_score", "value_score"]].head(10), height=400)
     else:
         st.warning("No value bets found")
 
-#Display the Win Score Analysis of Each Matchup
-def win_score_analysis(spreads):
+def display_win_score_tab(spreads):
     st.subheader("Win-Score Analysis")
     if not spreads.empty:
         grouped = spreads.groupby(["matchup", "team"]).agg({"win_score": "mean"}).reset_index()
@@ -178,15 +162,14 @@ def win_score_analysis(spreads):
             bars = ax.bar(teams, scores, color=colors)
             for bar in bars:
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2, height, f"{height:.2f}", ha="center")
+                ax.text(bar.get_x() + bar.get_width()/2, height + 0.05, f"{height:.2f}", ha="center")
             ax.set_title(f"{matchup}\nPredicted Winner: {winner}")
             ax.set_ylabel("Win Score")
             st.pyplot(fig)
     else:
         st.warning("No spread data available")
 
-#Display the Win Probability of each Team per Matchup
-def win_probabilty_analysis(h2h):
+def display_win_probabilities_tab(h2h):
     st.subheader("Moneyline Win Probabilities")
     if not h2h.empty:   
         h2h_avg = h2h.groupby(["matchup", "team"])["win_probability"].mean().reset_index()
@@ -207,8 +190,7 @@ def win_probabilty_analysis(h2h):
     else:
         st.warning("No moneyline data available")
 
-#Display Book Bias
-def book_bias_analysis(book_bias):
+def display_book_bias_tab(book_bias):
     st.subheader("Sportsbook Public Bias")
     if not book_bias.empty:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -222,8 +204,7 @@ def book_bias_analysis(book_bias):
     else:
         st.warning("No totals data available")
 
-#Display the Parlay Builder and Interactive User Features
-def parlay_interface(h2h):
+def display_parlay_builder_tab(h2h):
     st.subheader("Parlay Builder")
     if not h2h.empty:
         available_books = h2h["sportsbook"].unique()
@@ -278,7 +259,7 @@ def parlay_interface(h2h):
                     stake = st.number_input("Enter Stake ($):", min_value=1, value=100, step=1, key="parlay_stake")
                     
                     if st.session_state.parlay_bets:
-                        combined_odds, payout, profit = payout(st.session_state.parlay_bets, stake)
+                        combined_odds, payout, profit = calculate_parlay_payout(st.session_state.parlay_bets, stake)
                         st.markdown("---")
                         st.markdown(f"**Sportsbook:** {selected_book}")
                         st.markdown(f"**Number of Legs:** {len(st.session_state.parlay_bets)}")
@@ -292,12 +273,11 @@ def parlay_interface(h2h):
     else:
         st.warning("No moneyline data available for parlay building")
 
-#Start Session
 def main():
     if 'parlay_bets' not in st.session_state:
         st.session_state.parlay_bets = []
 
-    sports_list = fetch_main()
+    sports_list = fetch_sports_data()
     if not sports_list:
         return
 
@@ -305,15 +285,15 @@ def main():
     selected_sport = st.selectbox("Select a sport:", sport_names)
     sport_key = next(sport['key'] for sport in sports_list if sport['title'] == selected_sport)
 
-    data = fetch_odds(sport_key)
+    data = fetch_odds_data(sport_key)
     if not data:
         return
         
-    final_df = raw_data_cleaning(data)
-    spreads = win_score(final_df)
+    final_df = clean_odds_data(data)
+    spreads = calculate_win_scores(final_df)
     h2h = final_df[final_df['market'] == 'h2h'].copy()
-    best_value_bets = value_bets(spreads, h2h)
-    book_bias = book_bias(final_df)
+    best_value_bets = calculate_value_bets(spreads, h2h)
+    book_bias = calculate_book_bias(final_df)
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Value Bets", "Win Score Analysis", "Win Probabilities", 
@@ -321,18 +301,18 @@ def main():
     ])
 
     with tab1:
-        value_analysis(best_value_bets)
+        display_value_bets_tab(best_value_bets)
     with tab2:
-        win_score_analysis(spreads)
+        display_win_score_tab(spreads)
     with tab3:
-        win_probabilty_analysis(h2h)
+        display_win_probabilities_tab(h2h)
     with tab4:
-        book_bias_analysis(book_bias)
+        display_book_bias_tab(book_bias)
     with tab5:
         st.subheader("Safe Picks and Upset Alerts")
-        categorizing_picks(h2h)
+        display_favorite_picks(h2h)
     with tab6:
-        parlay_interface(h2h)
+        display_parlay_builder_tab(h2h)
 
 if __name__ == "__main__":
     main()
