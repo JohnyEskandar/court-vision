@@ -13,7 +13,7 @@ st.set_page_config(page_title="Court Vision", layout="wide")
 st.title("Court Vision: Revamping Sports Betting")
 
 #API Key and URL Declaration
-a_key = "23460d3aaebd465dfc9eebfe77c12c21"
+a_key = "Your api key here " #Create an API Key from the Odds API
 a_url = "https://api.the-odds-api.com/v4/sports"
 
 # helper methods
