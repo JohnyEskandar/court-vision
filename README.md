@@ -10,8 +10,6 @@ This project aimed to create a versatile tool to assist sports bettors by identi
 
 # NOTE
 Our code will not work before you complete the steps before
-|
-V
 
 # How to Use our Software
 1. Go to the Odds API: https://the-odds-api.com/
