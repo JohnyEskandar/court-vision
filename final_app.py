@@ -8,33 +8,41 @@ from functools import reduce
 import statsmodels.api as sm
 from scipy.stats import ttest_ind
 
+#
 st.set_page_config(page_title="Court Vision", layout="wide")
-st.title("Stay Ahead and Make some Bread")
+st.title("Court Vision: Revamping Sports Betting")
 
-API_KEY = "23460d3aaebd465dfc9eebfe77c12c21"
-API_URL = "https://api.the-odds-api.com/v4/sports"
+#API Key and URL Declaration
+a_key = "23460d3aaebd465dfc9eebfe77c12c21"
+a_url = "https://api.the-odds-api.com/v4/sports"
 
-def odds_to_probability(odds):
+# helper methods
+
+#Converts Live Odds to Implied Probability
+def odds_conversion(odds):
     return 100 / (odds + 100) if odds > 0 else -odds / (-odds + 100)
 
-def american_odds(odds):
+#American Odds to Decimal Format
+def decimal_conversion(odds):
     return odds / 100 + 1 if odds > 0 else -100 / odds + 1
 
-def fetch_sports_data():
+#Fetches and Connects API While Retrieving all Available Sports
+def fetch_and_connect():
     try:
-        response = requests.get(API_URL, params={"apiKey": API_KEY})
+        response = requests.get(a_url, params={"apiKey": a_key})
         response.raise_for_status()
-        sports_list = response.json()
-        st.success("API Connected Successfully")
-        return [sport for sport in sports_list if sport["title"] in {"NBA", "MLB", "NHL"}]
+        all_sports = response.json()
+        st.success("Successfully connected to sports data API")
+        return [sport for sport in all_sports if sport["title"] in {"NBA", "MLB", "NHL"}]
     except requests.exceptions.RequestException as e:
-        st.error(f"Failed to Connect: {str(e)}")
+        st.error(f"Failed to connect to API: {str(e)}")
         return []
 
-def fetch_odds_data(sport_key):
-    url = f"{API_URL}/{sport_key}/odds"
+#Gets the Key for NBA, MLB, and NHL
+def fetch_odds(sport_key):
+    url = f"{a_url}/{sport_key}/odds"
     params = {
-        "apiKey": API_KEY,
+        "apiKey": a_key,
         "regions": "us",
         "markets": "spreads,h2h,totals",
         "oddsFormat": "american"
@@ -47,272 +55,473 @@ def fetch_odds_data(sport_key):
         st.error(f"Failed to fetch odds data: {str(e)}")
         return []
 
-def clean_odds_data(data):
-    cleaned_data = []
-    for match in data:
-        game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
-        home = match["home_team"]
-        away = match["away_team"]
+#Data Cleaning 
+def raw_cleaning(raw_data):
+    processed_matches = []
+    
+    for game in raw_data:
+        game_time = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
+        home_team = game["home_team"]
+        away_team = game["away_team"]
+        matchup = f"{away_team} @ {home_team}"
         
-        for site in match.get("bookmakers", []):
-            book = site["title"]
-            for market in site.get("markets", []):
+        for bookmaker in game.get("bookmakers", []):
+            bookmaker_name = bookmaker["title"]
+            
+            for market in bookmaker.get("markets", []):
                 for outcome in market["outcomes"]:
                     entry = {
-                        "time": game_time,
-                        "home_team": home,
-                        "away_team": away,
-                        "matchup": f"{away} @ {home}",
-                        "market": market["key"],
-                        "sportsbook": book,
+                        "game_time": game_time,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "matchup": matchup,
+                        "market_type": market["key"],
+                        "sportsbook": bookmaker_name,
                         "team": outcome["name"],
                         "odds": outcome["price"]
                     }
+                    
                     if "point" in outcome:
                         entry["point"] = outcome["point"]
-                    cleaned_data.append(entry)
-    return pd.DataFrame(cleaned_data)
+                        
+                    processed_matches.append(entry)
+                    
+    return pd.DataFrame(processed_matches)
 
-def calculate_win_scores(df):
-    spreads = df[df["market"] == "spreads"].copy()
-    if spreads.empty:
-        return spreads
+#Win Score Metric
+def win_score_calculation(spread_data):
+    if spread_data.empty:
+        return spread_data
+        
+    spreads = spread_data.copy()
     spreads["spread_score"] = -spreads["point"]
-    spreads["prob"] = spreads["odds"].apply(odds_to_probability)
-    spreads["win_score"] = 0.5 * spreads["spread_score"] + 0.5 * spreads["prob"]
+    spreads["implied_prob"] = spreads["odds"].apply(odds_conversion)
+    spreads["win_score"] = 0.5 * spreads["spread_score"] + 0.5 * spreads["implied_prob"]
+    
+    # Normalize scores to probability range
+    spreads["estimated_win_prob"] = (
+        (spreads["win_score"] - spreads["win_score"].min()) / 
+        (spreads["win_score"].max() - spreads["win_score"].min())
+    )
+    
     return spreads
 
-def calculate_value_bets(spreads, h2h):
-    if h2h.empty:
+#Finding Value Bets
+def value_bets(spread_data, moneyline_data, stake=100):
+    if moneyline_data.empty:
         return pd.DataFrame()
-    h2h["win_probability"] = h2h["odds"].apply(odds_to_probability)
-    value_df = h2h.merge(spreads[["team", "win_score"]], on="team", how="left")
-    value_df["value_score"] = value_df["win_score"] - value_df["win_probability"]
-    best_value = value_df.loc[value_df.groupby("team")["value_score"].idxmax()].reset_index(drop=True)
-    return best_value[best_value["odds"] > -200].sort_values("value_score", ascending=False)
+    
+    value_calc = moneyline_data[["team", "matchup", "odds", "win_probability"]].merge(
+        spread_data[["team", "win_score"]], 
+        on="team", 
+        how="left"
+    )
+    
+    value_calc["value_indicator"] = value_calc["win_score"] - value_calc["win_probability"]
+    
+    #Measuring Payouts from Odds
+    def calculate_expected_return(prob, odds, stake=100):
+        payout = (odds / 100) * stake if odds > 0 else (100 / abs(odds)) * stake
+        return (prob * payout) + ((1 - prob) * (-stake))
 
-def calculate_book_bias(df):
-    totals = df[df["market"] == "totals"].copy()
-    if totals.empty:
+    value_calc["expected_value"] = value_calc.apply(
+        lambda row: round(calculate_expected_return(row["win_probability"], row["odds"], stake), 2),
+        axis=1
+    )
+    
+    value_calc["ev_ratio"] = (value_calc["expected_value"] / stake).round(4)
+    
+    best_bets = value_calc.loc[value_calc.groupby("team")["value_indicator"].idxmax()]
+    
+    #Filtering
+    return best_bets[best_bets["odds"] > -200].sort_values("ev_ratio", ascending=False)
+
+#Average Bias Per Book
+def average_book_bias(totals_data):
+    if totals_data.empty:
         return pd.Series(dtype=float)
-    totals["probability"] = totals["odds"].apply(odds_to_probability)
-    pivot = totals.pivot_table(index=["matchup", "sportsbook", "point"], 
-                             columns="team", values="probability").reset_index()
-    pivot["public_bias"] = pivot.get("Over", np.nan) - pivot.get("Under", np.nan)
-    bias = pivot.dropna(subset=["public_bias"])
-    return bias.groupby("sportsbook")["public_bias"].mean().sort_values()
+        
+    totals_data["implied_prob"] = totals_data["odds"].apply(odds_conversion)
+    
+    prob_comparison = totals_data.pivot_table(
+        index=["matchup", "sportsbook", "point"], 
+        columns="team", 
+        values="implied_prob"
+    ).reset_index()
+    
+    prob_comparison["bias_score"] = prob_comparison.get("Over", np.nan) - prob_comparison.get("Under", np.nan)
+    filtered_data = prob_comparison.dropna(subset=["bias_score"])
+    
+    return filtered_data.groupby("sportsbook")["bias_score"].mean().sort_values()
 
-def calculate_parlay_payout(bets, stake=100):
-    decimal_odds = [american_odds(bet['odds']) for bet in bets]
+#Calculating Payouts
+def parlay_payouts(bets, stake=100):
+    decimal_odds = [decimal_conversion(bet['odds']) for bet in bets]
     combined_odds = reduce(lambda x, y: x * y, decimal_odds)
-    payout = stake * combined_odds
-    profit = payout - stake
-    return combined_odds, payout, profit
+    total_payout = stake * combined_odds
+    net_profit = total_payout - stake
+    return combined_odds, total_payout, net_profit
 
-def display_favorite_picks(h2h_data):
-    if h2h_data.empty:
-        st.warning("No moneyline data available")
+#Classifying Teams as Safe, Risky, or Upsets
+def recommended_bets(moneyline_data):
+    if moneyline_data.empty:
+        st.warning("Moneyline Data Not Available")
         return
     
-    h2h_avg = h2h_data.groupby(["matchup", "team"])["win_probability"].mean().reset_index()
-    categories = {"Safe Picks": [], "Risky Calls": [], "Upset Alerts": []}
+    avg_probabilities = moneyline_data.groupby(["matchup", "team"])["win_probability"].mean().reset_index()
+    categories = {
+        "Safe": [], 
+        "50/50": [], 
+        "Upsets": []
+    }
     
-    for matchup, metrics in h2h_avg.groupby("matchup"):
-        if len(metrics) != 2:
+    for matchup, team_data in avg_probabilities.groupby("matchup"):
+        if len(team_data) != 2:
             continue
-        total_prob = metrics["win_probability"].sum()
-        metrics["normalized_prob"] = (metrics["win_probability"] / total_prob) * 100
+            
+        # Normalize Implied Probabilities to sum to 100%
+        total_prob = team_data["win_probability"].sum()
+        team_data["normalized_prob"] = (team_data["win_probability"] / total_prob) * 100
         
-        for _, row in metrics.iterrows():
-            pick = {"Team": row["team"], "Matchup": matchup, "Win Probability (%)": round(row["normalized_prob"], 2)}
+        for _, row in team_data.iterrows():
+            pick = {
+                "Team": row["team"], 
+                "Matchup": matchup, 
+                "Win %": round(row["normalized_prob"], 2)
+            }
             prob = row["normalized_prob"]
+            
             if prob > 65:
-                categories["Safe Picks"].append(pick)
+                categories["Safe"].append(pick)
             elif 48 <= prob <= 52:
-                categories["Risky Calls"].append(pick)
+                categories["50/50"].append(pick)
             elif 40 <= prob < 48:
-                categories["Upset Alerts"].append(pick)
+                categories["Upsets"].append(pick)
     
-    for category_name, picks in categories.items():
-        st.markdown(f"### {category_name}")
+    for category, picks in categories.items():
+        st.markdown(f"### {category}")
         if picks:
-            st.dataframe(pd.DataFrame(picks).sort_values("Win Probability (%)", ascending=False))
+            st.dataframe(
+                pd.DataFrame(picks).sort_values("Win %", ascending=False),
+                column_config={"Win %": st.column_config.NumberColumn(format="%.1f%%")}
+            )
         else:
-            st.info(f"No {category_name.lower()} found")
+            st.info(f"No {category.lower()} identified")
 
-def display_value_bets_tab(best_value_bets):
+#Displaying All Value Bets
+def display_value(value_bets):
     st.subheader("Top Value Bets")
-    if not best_value_bets.empty:
-        st.dataframe(best_value_bets[["team", "matchup", "odds", "win_probability", "win_score", "value_score"]].head(10), height=400)
+    if not value_bets.empty:
+        st.dataframe(
+            value_bets[["team", "matchup", "odds", "win_probability", "win_score", "value_indicator"]].head(10),
+            height=400,
+            column_config={
+                "win_probability": "Win Probability",
+                "win_score": "Win score",
+                "value_indicator": "Value Score"
+            }
+        )
     else:
-        st.warning("No value bets found")
+        st.warning("No Strong Bets")
 
-def display_win_score_tab(spreads):
-    st.subheader("Win-Score Analysis")
-    if not spreads.empty:
-        grouped = spreads.groupby(["matchup", "team"]).agg({"win_score": "mean"}).reset_index()
-        for matchup, metrics in grouped.groupby("matchup"):
-            if len(metrics) != 2:
+#Team Win Score Display
+def display_teams(spread_data):
+    st.subheader("Win Score Analysis")
+    
+    if not spread_data.empty:
+        grouped = spread_data.groupby(["matchup", "team"]).agg({"win_score": "mean"}).reset_index()
+        
+        for matchup, team_data in grouped.groupby("matchup"):
+            if len(team_data) != 2:
                 continue
-            teams = metrics["team"].values
-            scores = metrics["win_score"].values
-            winner = teams[np.argmax(scores)]
+                
+            teams = team_data["team"].values
+            scores = team_data["win_score"].values
+            predicted_winner = teams[np.argmax(scores)]
+            
             fig, ax = plt.subplots()
-            colors = ["green" if score == max(scores) else "red" for score in scores]
+            colors = ["#4CAF50" if score == max(scores) else "#F44336" for score in scores]
             bars = ax.bar(teams, scores, color=colors)
+            
             for bar in bars:
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2, height + 0.05, f"{height:.2f}", ha="center")
-            ax.set_title(f"{matchup}\nPredicted Winner: {winner}")
-            ax.set_ylabel("Win Score")
+                ax.text(
+                    bar.get_x() + bar.get_width()/2, 
+                    height + 0.05, 
+                    f"{height:.2f}", 
+                    ha="center",
+                    va="bottom"
+                )
+                
+            ax.set_title(f"{matchup}\nPredicted Winner: {predicted_winner}")
+            ax.set_ylabel("Strength Score")
+            plt.xticks(rotation=15)
             st.pyplot(fig)
     else:
-        st.warning("No spread data available")
+        st.warning("Spread Data Unavailable")
 
-def display_win_probabilities_tab(h2h):
-    st.subheader("Moneyline Win Probabilities")
-    if not h2h.empty:   
-        h2h_avg = h2h.groupby(["matchup", "team"])["win_probability"].mean().reset_index()
-        for matchup, metrics in h2h_avg.groupby("matchup"):
-            if len(metrics) != 2:
+#Display Win Probabilites per Team
+def display_win_probs(moneyline_data):
+    st.subheader("Win Probability Breakdown")
+    
+    if not moneyline_data.empty:   
+        avg_probabilities = moneyline_data.groupby(["matchup", "team"])["win_probability"].mean().reset_index()
+        
+        for matchup, team_data in avg_probabilities.groupby("matchup"):
+            if len(team_data) != 2:
                 continue
-            teams = metrics["team"].values
-            probs = metrics["win_probability"].values
-            probs = (probs / probs.sum()) * 100
+                
+            teams = team_data["team"].values
+            probs = (team_data["win_probability"].values / team_data["win_probability"].sum()) * 100
+            
             fig, ax = plt.subplots()
-            bars = ax.bar(teams, probs, color="skyblue")
+            bars = ax.bar(teams, probs, color="#2196F3")
+            
             for bar in bars:
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2, height + 0.01, f"{height:.1f}%", ha="center")
-            ax.set_title(f"{matchup} - Moneyline Probabilities")
+                ax.text(
+                    bar.get_x() + bar.get_width()/2, 
+                    height + 0.01, 
+                    f"{height:.1f}%", 
+                    ha="center",
+                    va="bottom"
+                )
+                
+            ax.set_title(f"{matchup} - Win Probability Comparison")
             ax.set_ylabel("Probability (%)")
+            plt.xticks(rotation=15)
             st.pyplot(fig)
     else:
-        st.warning("No moneyline data available")
+        st.warning("Moneyline Data Unavailable")
 
-def display_book_bias_tab(book_bias):
-    st.subheader("Sportsbook Public Bias")
-    if not book_bias.empty:
+#Display the Average Book Bias for each Sports
+def display_bias(bias_data):
+    st.subheader("Sportsbook Tendencies")
+    
+    if not bias_data.empty:
         fig, ax = plt.subplots(figsize=(8, 5))
-        book_bias.plot(kind="barh", color="salmon", edgecolor="black", ax=ax)
-        ax.axvline(0, linestyle="--", color="black")
-        ax.set_title("Book Bias (Over vs Under)")
-        ax.set_xlabel("Bias")
+        bias_data.plot(kind="barh", color="#FF9800", edgecolor="black", ax=ax)
+        ax.axvline(0, linestyle="--", color="black", alpha=0.7)
+        ax.set_title("Sportsbook Over/Under Biases")
+        ax.set_xlabel("Bias Score (Positive = Favors Over)")
         ax.set_ylabel("Sportsbook")
-        ax.grid(axis="x", linestyle="--", alpha=0.5)
+        ax.grid(axis="x", linestyle="--", alpha=0.3)
         st.pyplot(fig)
     else:
-        st.warning("No totals data available")
+        st.warning("Totals Data Unavailable")
 
-def display_parlay_builder_tab(h2h):
-    st.subheader("Parlay Builder")
-    if not h2h.empty:
-        available_books = h2h["sportsbook"].unique()
-        selected_book = st.selectbox("Select Sportsbook to Build Parlay From:", available_books, key="parlay_book_select")
-        book_h2h = h2h[h2h["sportsbook"] == selected_book].copy()
+#Interactive Parlay for Users
+def display_parlay_creator(moneyline_data):
+    st.subheader("Parlay Constructor")
+    
+    if not moneyline_data.empty:
+        available_books = moneyline_data["sportsbook"].unique()
+        selected_book = st.selectbox(
+            "Choose Sportsbook:", 
+            available_books, 
+            key="parlay_book_selector"
+        )
         
-        if book_h2h.empty:
-            st.warning(f"No moneyline data available for {selected_book}")
-        else:
-            col1, col2 = st.columns([3, 2])
+        book_data = moneyline_data[
+            (moneyline_data["sportsbook"] == selected_book) & 
+            (moneyline_data["market_type"] == "h2h")
+        ].copy()
+        
+        if book_data.empty:
+            st.warning(f"Moneyline data Unavailable from {selected_book}")
+            return
             
-            with col1:
-                st.markdown(f"### {selected_book} Matchups")
-                matchups = book_h2h.groupby("matchup").agg({'team': list, 'odds': list}).reset_index()
-                selected_matchup = st.selectbox("Select Matchup:", matchups["matchup"].unique(), key="parlay_matchup_select")
-                matchup_data = book_h2h[book_h2h["matchup"] == selected_matchup]
-                st.dataframe(matchup_data[["team", "odds"]].reset_index(drop=True), hide_index=True)
-                selected_team = st.selectbox("Select Team:", matchup_data["team"].unique(), key="parlay_team_select")
-                selected_odds = matchup_data[matchup_data["team"] == selected_team]["odds"].iloc[0]
-                
-                if st.button("Add to Parlay"):
-                    if any(bet["team"] == selected_team and bet["matchup"] == selected_matchup 
-                          for bet in st.session_state.get('parlay_bets', [])):
-                        st.warning("This team is already in your parlay for this matchup")
-                    else:
-                        if 'parlay_bets' not in st.session_state:
-                            st.session_state.parlay_bets = []
-                        st.session_state.parlay_bets.append({
-                            "sportsbook": selected_book,
-                            "matchup": selected_matchup,
-                            "team": selected_team,
-                            "odds": selected_odds
-                        })
-                        st.rerun()
+        col1, col2 = st.columns([3, 2])
+        
+        with col1:
+            st.markdown(f"### {selected_book} Game Lines")
             
-            with col2:
-                st.markdown("### Your Parlay")
-                if not st.session_state.get('parlay_bets'):
-                    st.info("No bets added yet")
+            st.info("""
+                **Note:Some games show multiple odds for the same team.  
+                - First odds are current live odds  
+                - Second set shows opening odds  
+                - This helps track line movement
+            """)
+            
+            matchups = book_data[["matchup", "team", "odds"]].drop_duplicates()
+            matchup_options = matchups["matchup"].unique()
+            
+            selected_matchup = st.selectbox(
+                "Select Game:", 
+                matchup_options, 
+                key="parlay_game_selector"
+            )
+            
+            matchup_odds = matchups[matchups["matchup"] == selected_matchup]
+            st.dataframe(
+                matchup_odds[["team", "odds"]].reset_index(drop=True), 
+                hide_index=True,
+                column_config={
+                    "team": "Team",
+                    "odds": "Odds"
+                }
+            )
+            
+            selected_team = st.selectbox(
+                "Pick Team:", 
+                matchup_odds["team"].unique(), 
+                key="parlay_team_selector"
+            )
+            
+            selected_odds = matchup_odds[matchup_odds["team"] == selected_team]["odds"].iloc[0]
+            
+            if st.button("Add to Parlay", key="add_parlay_leg"):
+                if 'parlay_bets' not in st.session_state:
+                    st.session_state.parlay_bets = []
+                    
+                if any(
+                    bet["team"] == selected_team and bet["matchup"] == selected_matchup 
+                    for bet in st.session_state.parlay_bets
+                ):
+                    st.warning("Cannot Add Same Team Again")
                 else:
-                    unique_books = {bet["sportsbook"] for bet in st.session_state.parlay_bets}
-                    if len(unique_books) > 1:
-                        st.error("Error: Parlay contains bets from multiple sportsbooks")
-                    
-                    for i, bet in enumerate(st.session_state.parlay_bets):
-                        cols = st.columns([4, 1])
-                        cols[0].write(f"{bet['team']} ({bet['odds']}) - {bet['matchup']}")
-                        if cols[1].button("Remove", key=f"remove_{i}"):
-                            st.session_state.parlay_bets.pop(i)
-                            st.rerun()
-                    
-                    stake = st.number_input("Enter Stake ($):", min_value=1, value=100, step=1, key="parlay_stake")
-                    
-                    if st.session_state.parlay_bets:
-                        combined_odds, payout, profit = calculate_parlay_payout(st.session_state.parlay_bets, stake)
-                        st.markdown("---")
-                        st.markdown(f"**Sportsbook:** {selected_book}")
-                        st.markdown(f"**Number of Legs:** {len(st.session_state.parlay_bets)}")
-                        st.markdown(f"**Combined Odds:** {combined_odds:.2f}")
-                        st.metric("Potential Payout", f"${payout:.2f}")
-                        st.metric("Potential Profit", f"${profit:.2f}")
-                    
-                    if st.button("Clear Parlay"):
-                        st.session_state.parlay_bets = []
+                    st.session_state.parlay_bets.append({
+                        "sportsbook": selected_book,
+                        "matchup": selected_matchup,
+                        "team": selected_team,
+                        "odds": selected_odds
+                    })
+                    st.rerun()
+        
+        with col2:
+            st.markdown("### Bet Slip")
+            
+            if not st.session_state.get('parlay_bets'):
+                st.info("Empty Parlay")
+            else:
+                unique_books = {bet["sportsbook"] for bet in st.session_state.parlay_bets}
+                if len(unique_books) > 1:
+                    st.error("Error: All Bets Must Be from the Same Sportsbook")
+                
+                for i, bet in enumerate(st.session_state.parlay_bets):
+                    cols = st.columns([4, 1])
+                    cols[0].write(f"{bet['team']} ({bet['odds']}) - {bet['matchup']}")
+                    if cols[1].button(" ", key=f"remove_{i}"):
+                        st.session_state.parlay_bets.pop(i)
                         st.rerun()
+                
+                stake = st.number_input(
+                    "Enter Wager Amount:", 
+                    min_value=1, 
+                    value=100, 
+                    step=1, 
+                    key="parlay_stake"
+                )
+                
+                if st.session_state.parlay_bets:
+                    odds, payout, profit = parlay_payouts(
+                        st.session_state.parlay_bets, 
+                        stake
+                    )
+                    
+                    st.markdown("---")
+                    st.markdown(f"**Sportsbook:** {selected_book}")
+                    st.markdown(f"**Number of Legs:** {len(st.session_state.parlay_bets)}")
+                    st.markdown(f"**Combined Odds:** {odds:.2f}x")
+                    
+                    col_a, col_b = st.columns(2)
+                    col_a.metric("Potential Payout", f"${payout:,.2f}")
+                    col_b.metric("Potential Profit", f"${profit:,.2f}")
+                
+                if st.button("Clear Parlay", key="clear_parlay"):
+                    st.session_state.parlay_bets = []
+                    st.rerun()
     else:
-        st.warning("No moneyline data available for parlay building")
+        st.warning("No Moneyline Data Available")
 
+#EV Score Display
+def display_EV_analysis(value_bets):
+    st.subheader("Expected Value Opportunities")
+    
+    if not value_bets.empty:
+        value_bets["EV Rating"] = value_bets["expected_value"].apply(
+            lambda ev: "Positive" if ev > 0 else "Negative"
+        )
+        
+        st.dataframe(
+            value_bets[[
+                "team", "matchup", "odds", "win_probability", 
+                "expected_value", "ev_ratio", "EV Rating"
+            ]].round({
+                "win_probability": 2,
+                "expected_value": 2,
+                "ev_ratio": 4
+            }),
+            height=600,
+            column_config={
+                "team": "Team",
+                "matchup": "Game",
+                "odds": "Odds",
+                "win_probability": st.column_config.NumberColumn("Win %", format="%.2f"),
+                "expected_value": st.column_config.NumberColumn("Expected Value", format="%.2f"),
+                "ev_ratio": st.column_config.NumberColumn("EV Ratio", format="%.4f"),
+                "EV Rating": "EV Assessment"
+            }
+        )
+    else:
+        st.warning("No +EV opportunities")
+
+#Executing Main Method and Beginning the Session
 def main():
     if 'parlay_bets' not in st.session_state:
         st.session_state.parlay_bets = []
-
-    sports_list = fetch_sports_data()
-    if not sports_list:
-        return
-
-    sport_names = [sport['title'] for sport in sports_list]
-    selected_sport = st.selectbox("Select a sport:", sport_names)
-    sport_key = next(sport['key'] for sport in sports_list if sport['title'] == selected_sport)
-
-    data = fetch_odds_data(sport_key)
-    if not data:
+    
+    st.sidebar.header("Sport Selection")
+    available_sports = fetch_and_connect()
+    if not available_sports:
         return
         
-    final_df = clean_odds_data(data)
-    spreads = calculate_win_scores(final_df)
-    h2h = final_df[final_df['market'] == 'h2h'].copy()
-    best_value_bets = calculate_value_bets(spreads, h2h)
-    book_bias = calculate_book_bias(final_df)
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "Value Bets", "Win Score Analysis", "Win Probabilities", 
-        "Book Bias", "Favorite Picks", "Parlay Builder"
+    sport_names = [sport['title'] for sport in available_sports]
+    selected_sport = st.sidebar.selectbox("Choose Sport:", sport_names)
+    sport_key = next(sport['key'] for sport in available_sports if sport['title'] == selected_sport)
+    
+    raw_data = fetch_odds(sport_key)
+    if not raw_data:
+        return
+        
+    processed_data = raw_cleaning(raw_data)
+    spread_analysis = win_score_calculation(processed_data[processed_data["market_type"] == "spreads"])
+    
+    moneyline_data = processed_data[processed_data['market_type'] == 'h2h'].copy()
+    moneyline_data = moneyline_data.merge(
+        spread_analysis[["team", "estimated_win_prob"]], 
+        on="team", 
+        how="left"
+    )
+    moneyline_data["win_probability"] = moneyline_data["estimated_win_prob"]
+    
+    top_value_bets = value_bets(spread_analysis, moneyline_data)
+    bookmaker_biases = average_book_bias(processed_data[processed_data["market_type"] == "totals"])
+    
+    analysis_tabs = st.tabs([
+        "Value Bets", 
+        "Win Score Analysis", 
+        "Win Probabilities", 
+        "Book Biases",
+        "Our Recommendations", 
+        "EV Analysis",
+        "Mock Parlay Builder"
     ])
-
-    with tab1:
-        display_value_bets_tab(best_value_bets)
-    with tab2:
-        display_win_score_tab(spreads)
-    with tab3:
-        display_win_probabilities_tab(h2h)
-    with tab4:
-        display_book_bias_tab(book_bias)
-    with tab5:
-        st.subheader("Safe Picks and Upset Alerts")
-        display_favorite_picks(h2h)
-    with tab6:
-        display_parlay_builder_tab(h2h)
+    
+    with analysis_tabs[0]:
+        display_value(top_value_bets)
+    with analysis_tabs[1]:
+        display_teams(spread_analysis)
+    with analysis_tabs[2]:
+        display_win_probs(moneyline_data)
+    with analysis_tabs[3]:
+        display_bias(bookmaker_biases)
+    with analysis_tabs[4]:
+        recommended_bets(moneyline_data)
+    with analysis_tabs[5]:
+        display_EV_analysis(top_value_bets)
+    with analysis_tabs[6]:
+        display_parlay_creator(moneyline_data)
 
 if __name__ == "__main__":
     main()
