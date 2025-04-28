@@ -1,6 +1,5 @@
 # Welcome to Court Vision
-
-# Our Software Encourages Statistical Sports Betting Decisions with Live Time Sports Updates for the Following Sports: NBA, NHL, NBA
+Our Software Encourages Statistical Sports Betting Decisions with Live Time Sports Updates for the Following Sports: NBA, NHL, NBA
 
 # Our Goal
 This project aimed to create a versatile tool to assist sports bettors by identifying potential market inefficiencies and favorable betting opportunities available in different sportsbooks. Our tool, Court Vision, takes live time betting odds from The Odds API and highlights profitable opportunities that bettors can take advantage of. The project was executed via the following steps: establishing a connection with the API, extracting the raw odds and team data, cleaning the raw data, developing unique metrics that measure value, and constructing an interactive, user-friendly app that encourages bettors to make smart bets regardless of their statistical knowledge. 
